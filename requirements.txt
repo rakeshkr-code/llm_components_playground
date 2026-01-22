@@ -1,0 +1,36 @@
+# =========================
+# Core LangChain
+# =========================
+langchain
+langchain-community
+langchain-openai
+langchain-core
+
+# =========================
+# Integrations
+# =========================
+langchain-huggingface
+langchain-ollama
+langchain-chroma
+
+# =========================
+# Vector Store & Embeddings
+# =========================
+chromadb
+sentence-transformers
+
+# =========================
+# Document Processing
+# =========================
+pypdf
+python-dotenv
+
+# =========================
+# Interface
+# =========================
+gradio
+
+# =========================
+# Utilities
+# =========================
+numpy
