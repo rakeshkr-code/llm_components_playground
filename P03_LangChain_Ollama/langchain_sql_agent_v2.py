@@ -265,33 +265,52 @@ if __name__ == "__main__":
     
     # Test queries
     test_queries = [
-        # Simple query
-        "What fruits are red?",
+        # # Simple query
+        # "What fruits are red?",
         
-        # Range query
-        "Show me fruits between $2 and $4",
+        # # Range query
+        # "Show me fruits between $2 and $4",
         
-        # Aggregate query
-        "What's the average price of all fruits?",
+        # # Aggregate query
+        # "What's the average price of all fruits?",
         
-        # Complex query
-        "Find fruits with stock above 80 and price below $3",
+        # # Complex query
+        # "Find fruits with stock above 80 and price below $3",
         
-        # Multi-tool query
-        "List all yellow fruits, calculate total value (price * stock) for bananas, and check London weather",
+        # # Multi-tool query
+        # "List all yellow fruits, calculate total value (price * stock) for bananas, and check London weather",
         
-        # Advanced query
-        "Which fruit has the best price-to-stock ratio?"
+        # # Advanced query
+        # "Which fruit has the best price-to-stock ratio?"
+
+        # Testing
+        # "Tell me the square of the number of mangoes existing in stock.", # Wrong answer
+        "Calculate the square value of the stock value of fruit Mango.",
+        "What is the stock value of fruit name Mango, calculate the square of that value using calculator"
     ]
     
-    for i, query in enumerate(test_queries, 1):
-        print(f"\n{'#'*70}")
-        print(f"TEST {i}/{len(test_queries)}")
-        print(f"{'#'*70}\n")
+    # for i, query in enumerate(test_queries, 1):
+    #     print(f"\n{'#'*70}")
+    #     print(f"TEST {i}/{len(test_queries)}")
+    #     print(f"{'#'*70}\n")
         
-        run_query(agent, query)
+    #     run_query(agent, query)
         
-        if i < len(test_queries):
-            input("Press Enter for next test...")
+    #     if i < len(test_queries):
+    #         input("Press Enter for next test...")
     
-    print("\n✅ All tests complete!")
+    # print("\n✅ All tests complete!")
+    # --------------------------------------------------------
+    state = True
+    while state:
+        user_query = input("Enter your query (or Press Enter to quit): ")
+        if user_query.strip() == "":
+            print("Exiting...")
+            state = False
+            break  
+        print(f"\n{'-'*20}")
+        print(f"User Query : {user_query}")
+        print(f"\n{'-'*20}")
+              
+        run_query(agent, user_query)
+        

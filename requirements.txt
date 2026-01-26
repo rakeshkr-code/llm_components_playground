@@ -34,3 +34,4 @@ gradio
 # Utilities
 # =========================
 numpy
+python-dotenv
