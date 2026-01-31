@@ -56,7 +56,7 @@ def create_database():
     """Create SQLite database with fruit table"""
     print("Creating database...")
     
-    conn = sqlite3.connect('fruits_v1.db')
+    conn = sqlite3.connect('fruits_v2.db')
     cursor = conn.cursor()
     
     cursor.execute('DROP TABLE IF EXISTS fruit_table')
@@ -93,35 +93,25 @@ def create_database():
     print("✓ Database created!\n")
 
 def get_database_schema():
-    """Get database schema for LLM"""
-    conn = sqlite3.connect('fruits_v1.db')
+    conn = sqlite3.connect("fruits_v2.db")
     cursor = conn.cursor()
-    
+
     cursor.execute("PRAGMA table_info(fruit_table)")
     columns = cursor.fetchall()
-    
+
     cursor.execute("SELECT * FROM fruit_table LIMIT 3")
     samples = cursor.fetchall()
-    
+
     conn.close()
-    
-    schema_info = """
-Database: fruits_v1.db
-Table: fruit_table
 
-Columns:
-- id: INTEGER (Primary Key)
-- name: TEXT (Fruit name)
-- color: TEXT (Fruit color)
-- price: REAL (Price in dollars)
-- stock: INTEGER (Available quantity)
+    schema ="Table: fruit_table\n\nColumns:\n"
+    for col in columns:
+        schema +=f"- {col[1]} ({col[2]})\n"
+        schema +="\nSample rows:\n"
+    for row in samples:
+        schema +=f"- {row}\n"
+    return schema
 
-Sample data:
-"""
-    for sample in samples:
-        schema_info += f"- {sample}\n"
-    
-    return schema_info
 
 # ============================================================
 # PART 2: LLM-POWERED SQL TOOLS
@@ -153,7 +143,7 @@ def execute_sql(sql_query: str) -> str:
         return "Error: Modification queries are not allowed."
     
     try:
-        conn = sqlite3.connect('fruits_v1.db')
+        conn = sqlite3.connect('fruits_v2.db')
         cursor = conn.cursor()
         
         cursor.execute(sql_query)
