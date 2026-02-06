@@ -2,21 +2,53 @@ import sqlite3
 from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint
 from langchain.agents import create_agent
 from langchain_core.tools import tool
+from langchain_core.chat_history import BaseChatMessageHistory
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
+from langchain_core.runnables.history import RunnableWithMessageHistory
+from typing import List
 import os
 from dotenv import load_dotenv
 
 # ============================================================
-# CONFIGURATION: Choose Your Model
+# MEMORY: In-Memory Chat History (FIXED)
 # ============================================================
 
-# Get HuggingFace API token (FREE - sign up at huggingface.co)
-# Create token at: https://huggingface.co/settings/tokens
-# HUGGINGFACE_API_TOKEN = os.getenv("HUGGINGFACE_API_TOKEN", "your-token-here")
-# loads .env into environment variables
+class InMemoryChatHistory(BaseChatMessageHistory):
+    """Simple in-memory chat history"""
+    
+    def __init__(self):
+        self.messages: List[BaseMessage] = []
+    
+    def add_message(self, message: BaseMessage) -> None:
+        """Add a message to the history"""
+        self.messages.append(message)
+        print(f"[DEBUG] Added to history: {type(message).__name__}: {message.content[:50]}...")
+    
+    def add_messages(self, messages: List[BaseMessage]) -> None:
+        """Add multiple messages to history"""
+        for message in messages:
+            self.add_message(message)
+    
+    def clear(self) -> None:
+        """Clear all messages"""
+        self.messages = []
+        print("[DEBUG] History cleared")
+    
+    @property
+    def messages_list(self) -> List[BaseMessage]:
+        """Get all messages"""
+        return self.messages
+
+# Global conversation history
+conversation_history = InMemoryChatHistory()
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
 load_dotenv()
 HUGGINGFACE_API_TOKEN = os.getenv("HUGGINGFACE_API_TOKEN")
 
-# Model selection (pick one):
 MODEL_CONFIGS = {
     "qwen": {
         "name": "Qwen/Qwen2.5-72B-Instruct",
@@ -45,11 +77,10 @@ MODEL_CONFIGS = {
     }
 }
 
-# SELECT YOUR MODEL HERE
-SELECTED_MODEL = "qwen"  # Change to: "mixtral", "llama", "command-r", or "phi"
+SELECTED_MODEL = "qwen"
 
 # ============================================================
-# PART 1: DATABASE SETUP
+# DATABASE SETUP
 # ============================================================
 
 def create_database():
@@ -104,17 +135,18 @@ def get_database_schema():
 
     conn.close()
 
-    schema ="Table: fruit_table\n\nColumns:\n"
+    schema = "Table: fruit_table\n\nColumns:\n"
     for col in columns:
-        schema +=f"- {col[1]} ({col[2]})\n"
-        schema +="\nSample rows:\n"
+        schema += f"- {col[1]} ({col[2]})\n"
+    
+    schema += "\nSample rows:\n"
     for row in samples:
-        schema +=f"- {row}\n"
+        schema += f"- {row}\n"
+    
     return schema
 
-
 # ============================================================
-# PART 2: LLM-POWERED SQL TOOLS
+# TOOLS
 # ============================================================
 
 @tool
@@ -193,29 +225,19 @@ def get_weather(city: str) -> str:
     return weather_db.get(city.lower(), f"Weather in {city}: Sunny, 22°C")
 
 # ============================================================
-# PART 3: HUGGINGFACE LLM SETUP
+# LLM SETUP
 # ============================================================
 
-def create_huggingface_llm(model_name: str):
+def create_huggingface_llm(model_key: str):
     """Create HuggingFace LLM via Inference API (FREE)"""
     
-    model_config = MODEL_CONFIGS[model_name]
+    model_config = MODEL_CONFIGS[model_key]
     
     print(f"\n🤗 Initializing HuggingFace Model:")
     print(f"   Model: {model_config['name']}")
     print(f"   Description: {model_config['description']}")
     print(f"   Max tokens: {model_config['max_tokens']}")
     
-    # # Check API token
-    # if HUGGINGFACE_API_TOKEN == "your-token-here":
-    #     print("\n⚠️  WARNING: Please set HUGGINGFACE_API_TOKEN!")
-    #     print("   1. Go to https://huggingface.co/settings/tokens")
-    #     print("   2. Create a token (FREE)")
-    #     print("   3. Set it in code or environment variable:")
-    #     print('      export HUGGINGFACE_API_TOKEN="your-token"')
-    #     print("\n   Using demo mode with limited functionality...")
-    
-    # Create HuggingFace endpoint
     llm = HuggingFaceEndpoint(
         repo_id=model_config['name'],
         huggingfacehub_api_token=HUGGINGFACE_API_TOKEN,
@@ -225,21 +247,19 @@ def create_huggingface_llm(model_name: str):
         repetition_penalty=1.1,
     )
     
-    # Wrap in ChatHuggingFace for chat interface
     chat_llm = ChatHuggingFace(llm=llm)
     
     print("✓ HuggingFace LLM initialized!\n")
     return chat_llm
 
 # ============================================================
-# PART 4: SQL AGENT WITH HUGGINGFACE
+# SIMPLER STATEFUL AGENT (MANUAL MEMORY MANAGEMENT)
 # ============================================================
 
 def create_sql_agent():
-    """Create agent that generates SQL queries using HuggingFace LLM"""
-    print("Initializing SQL agent with HuggingFace...")
+    """Create agent - we'll manage memory manually"""
+    print("Initializing SQL agent with MEMORY...")
     
-    # Create HuggingFace LLM
     chatllm = create_huggingface_llm(SELECTED_MODEL)
     
     tools = [
@@ -249,6 +269,7 @@ def create_sql_agent():
         get_weather
     ]
     
+    # Create base agent (no memory wrapper)
     agent = create_agent(
         model=chatllm,
         tools=tools,
@@ -265,7 +286,6 @@ IMPORTANT SQL RULES:
 - Use proper SQL syntax (SQLite)
 - Handle NULL values appropriately
 - Use LIMIT when appropriate
-- Join tables if needed (though we only have one table)
 
 Example workflow:
 User: "What fruits are red?"
@@ -276,36 +296,77 @@ User: "What fruits are red?"
 
 You can also use calculator and get_weather tools when needed.
 
-IMPORTANT: When asked to calculate, use the calculator tool for accuracy."""
+IMPORTANT: When asked to calculate, use the calculator tool for accuracy.
+
+MEMORY: You have access to conversation history. When users refer to "it", "that", or "the previous", 
+check the conversation history for context."""
     )
     
-    print("✓ SQL Agent ready!\n")
+    print("✓ SQL Agent with MEMORY ready!\n")
     return agent
 
 def run_query(agent, user_query: str):
-    """Run a user query through the SQL agent"""
+    """Run a user query with MANUAL memory management"""
     print("="*70)
     print(f"USER QUERY: {user_query}")
     print("="*70)
     
     try:
-        response = agent.invoke({
-            "messages": [{"role": "user", "content": user_query}]
-        })
+        # Create user message
+        user_message = HumanMessage(content=user_query)
+        
+        # Manually add user message to history
+        conversation_history.add_message(user_message)
+        
+        # Prepare messages: history + new message
+        all_messages = conversation_history.messages.copy()
+        
+        print(f"\n[DEBUG] Sending {len(all_messages)} messages to agent")
+        
+        # Invoke agent with full history
+        response = agent.invoke({"messages": all_messages})
         
         print("\n" + "="*40)
-        print(f"\n📜 FULL RESPONSE: \n{response}\n")
+        print(f"\n📜 FULL RESPONSE TYPE: {type(response)}")
+        print(f"📜 RESPONSE KEYS: {response.keys() if isinstance(response, dict) else 'N/A'}")
         print("\n" + "="*40)
 
-        final_message = response["messages"][-1]
+        # Extract new messages from response
+        if "messages" in response:
+            response_messages = response["messages"]
+            
+            # Find new messages (ones not already in history)
+            new_messages = response_messages[len(all_messages):]
+            
+            # Add new agent messages to history
+            for msg in new_messages:
+                if not isinstance(msg, HumanMessage):  # Don't re-add user messages
+                    conversation_history.add_message(msg)
+            
+            final_message = response_messages[-1]
+        else:
+            final_message = response
+            conversation_history.add_message(AIMessage(content=str(response)))
         
         print("\n" + "="*70)
         print("AGENT RESPONSE:")
         print("="*70)
-        print(final_message.content)
+        print(final_message.content if hasattr(final_message, 'content') else final_message)
         print("="*70 + "\n")
         
-        return final_message.content
+        # Show conversation history
+        print("\n" + "💭"*35)
+        print("CONVERSATION HISTORY")
+        print("💭"*35)
+        print(f"Total messages in memory: {len(conversation_history.messages)}")
+        
+        for i, msg in enumerate(conversation_history.messages[-10:], 1):  # Last 10 messages
+            msg_type = "USER" if isinstance(msg, HumanMessage) else "AGENT"
+            content = msg.content[:100] + "..." if len(msg.content) > 100 else msg.content
+            print(f"{i}. [{msg_type}]: {content}")
+        print("="*70 + "\n")
+        
+        return final_message.content if hasattr(final_message, 'content') else str(final_message)
     
     except Exception as e:
         print(f"\n❌ Error: {e}\n")
@@ -314,39 +375,46 @@ def run_query(agent, user_query: str):
         return None
 
 # ============================================================
-# PART 5: MAIN EXECUTION
+# MAIN EXECUTION
 # ============================================================
 
 if __name__ == "__main__":
     print("\n" + "="*70)
-    print("SQL AGENT WITH HUGGINGFACE LLM")
+    print("STATEFUL SQL AGENT WITH SHORT-TERM MEMORY")
     print(f"Using: {MODEL_CONFIGS[SELECTED_MODEL]['name']}")
     print("="*70 + "\n")
     
-    # Create database
     create_database()
     
-    # Verify
     print("Database schema:")
     print(get_database_schema())
     
-    # Create agent
     agent = create_sql_agent()
     
-    # Interactive mode
     print("\n" + "="*70)
-    print("INTERACTIVE MODE")
+    print("INTERACTIVE MODE WITH MEMORY")
     print("="*70)
-    print("Enter your queries. Press Enter with empty input to quit.")
-    # user_query = "What is the stock value of fruit name Mango, calculate the square of that value using calculator"
-    # What is the square of the stock value of fruit Mango?
+    print("The agent now remembers your conversation!")
+    print("Try follow-up questions like:")
+    print('  - "What about the price?" (after asking about a fruit)')
+    print('  - "Calculate the square of that" (after seeing a number)')
+    print('  - "What did I ask about earlier?"')
+    print("\nCommands:")
+    print("  - Type 'clear' to clear conversation memory")
+    print("  - Press Enter (empty) to quit")
     print("="*70 + "\n")
     
     while True:
         user_query = input("🔍 Your query: ")
+        
         if user_query.strip() == "":
             print("\n👋 Exiting...")
             break
+        
+        if user_query.strip().lower() == "clear":
+            conversation_history.clear()
+            print("\n🧹 Conversation memory cleared!\n")
+            continue
         
         print(f"\n{'-'*70}")
         run_query(agent, user_query)
