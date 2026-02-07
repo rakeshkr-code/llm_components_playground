@@ -2,45 +2,25 @@ import sqlite3
 from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint
 from langchain.agents import create_agent
 from langchain_core.tools import tool
-from langchain_core.chat_history import BaseChatMessageHistory
+from langchain_community.chat_message_histories import SQLChatMessageHistory
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
-from langchain_core.runnables.history import RunnableWithMessageHistory
 from typing import List
 import os
 from dotenv import load_dotenv
 
 # ============================================================
-# MEMORY: In-Memory Chat History (FIXED)
+# MEMORY: SQLite-Based Persistent Chat History
 # ============================================================
 
-class InMemoryChatHistory(BaseChatMessageHistory):
-    """Simple in-memory chat history"""
-    
-    def __init__(self):
-        self.messages: List[BaseMessage] = []
-    
-    def add_message(self, message: BaseMessage) -> None:
-        """Add a message to the history"""
-        self.messages.append(message)
-        print(f"[DEBUG] Added to history: {type(message).__name__}: {message.content[:50]}...")
-    
-    def add_messages(self, messages: List[BaseMessage]) -> None:
-        """Add multiple messages to history"""
-        for message in messages:
-            self.add_message(message)
-    
-    def clear(self) -> None:
-        """Clear all messages"""
-        self.messages = []
-        print("[DEBUG] History cleared")
-    
-    @property
-    def messages_list(self) -> List[BaseMessage]:
-        """Get all messages"""
-        return self.messages
-
-# Global conversation history
-conversation_history = InMemoryChatHistory()
+def get_session_history(session_id: str) -> SQLChatMessageHistory:
+    """
+    Get or create a persistent chat history for a session.
+    Data is stored in SQLite and survives script restarts.
+    """
+    return SQLChatMessageHistory(
+        session_id=session_id,
+        connection_string="sqlite:///chat_memory.db"  # Persistent database file
+    )
 
 # ============================================================
 # CONFIGURATION
@@ -87,7 +67,7 @@ def create_database():
     """Create SQLite database with fruit table"""
     print("Creating database...")
     
-    conn = sqlite3.connect('fruits_v1.db')
+    conn = sqlite3.connect('fruits_v2.db')
     cursor = conn.cursor()
     
     cursor.execute('DROP TABLE IF EXISTS fruit_table')
@@ -124,7 +104,7 @@ def create_database():
     print("✓ Database created!\n")
 
 def get_database_schema():
-    conn = sqlite3.connect("fruits_v1.db")
+    conn = sqlite3.connect("fruits_v2.db")
     cursor = conn.cursor()
 
     cursor.execute("PRAGMA table_info(fruit_table)")
@@ -175,7 +155,7 @@ def execute_sql(sql_query: str) -> str:
         return "Error: Modification queries are not allowed."
     
     try:
-        conn = sqlite3.connect('fruits_v1.db')
+        conn = sqlite3.connect('fruits_v2.db')
         cursor = conn.cursor()
         
         cursor.execute(sql_query)
@@ -253,12 +233,12 @@ def create_huggingface_llm(model_key: str):
     return chat_llm
 
 # ============================================================
-# SIMPLER STATEFUL AGENT (MANUAL MEMORY MANAGEMENT)
+# PERSISTENT STATEFUL AGENT
 # ============================================================
 
 def create_sql_agent():
-    """Create agent - we'll manage memory manually"""
-    print("Initializing SQL agent with MEMORY...")
+    """Create agent with persistent SQLite memory"""
+    print("Initializing SQL agent with PERSISTENT MEMORY...")
     
     chatllm = create_huggingface_llm(SELECTED_MODEL)
     
@@ -269,7 +249,7 @@ def create_sql_agent():
         get_weather
     ]
     
-    # Create base agent (no memory wrapper)
+    # Create base agent
     agent = create_agent(
         model=chatllm,
         tools=tools,
@@ -302,35 +282,35 @@ MEMORY: You have access to conversation history. When users refer to "it", "that
 check the conversation history for context."""
     )
     
-    print("✓ SQL Agent with MEMORY ready!\n")
+    print("✓ SQL Agent with PERSISTENT MEMORY ready!\n")
     return agent
 
-def run_query(agent, user_query: str):
-    """Run a user query with MANUAL memory management"""
+def run_query(agent, user_query: str, session_id: str = "default_session"):
+    """Run a user query with PERSISTENT SQLite memory"""
     print("="*70)
     print(f"USER QUERY: {user_query}")
+    print(f"SESSION ID: {session_id}")
     print("="*70)
     
     try:
+        # Get persistent history for this session
+        history = get_session_history(session_id)
+        
         # Create user message
         user_message = HumanMessage(content=user_query)
         
-        # Manually add user message to history
-        conversation_history.add_message(user_message)
+        # Add user message to persistent history
+        history.add_message(user_message)
+        print(f"\n[DEBUG] Added user message to persistent DB")
         
-        # Prepare messages: history + new message
-        all_messages = conversation_history.messages.copy()
+        # Get all messages from persistent history
+        all_messages = history.messages
         
-        print(f"\n[DEBUG] Sending {len(all_messages)} messages to agent")
+        print(f"[DEBUG] Retrieved {len(all_messages)} messages from persistent DB")
         
         # Invoke agent with full history
         response = agent.invoke({"messages": all_messages})
         
-        print("\n" + "="*40)
-        print(f"\n📜 FULL RESPONSE TYPE: {type(response)}")
-        print(f"📜 RESPONSE KEYS: {response.keys() if isinstance(response, dict) else 'N/A'}")
-        print("\n" + "="*40)
-
         # Extract new messages from response
         if "messages" in response:
             response_messages = response["messages"]
@@ -338,15 +318,16 @@ def run_query(agent, user_query: str):
             # Find new messages (ones not already in history)
             new_messages = response_messages[len(all_messages):]
             
-            # Add new agent messages to history
+            # Add new agent messages to persistent history
             for msg in new_messages:
                 if not isinstance(msg, HumanMessage):  # Don't re-add user messages
-                    conversation_history.add_message(msg)
+                    history.add_message(msg)
+                    print(f"[DEBUG] Added agent message to persistent DB")
             
             final_message = response_messages[-1]
         else:
             final_message = response
-            conversation_history.add_message(AIMessage(content=str(response)))
+            history.add_message(AIMessage(content=str(response)))
         
         print("\n" + "="*70)
         print("AGENT RESPONSE:")
@@ -354,13 +335,16 @@ def run_query(agent, user_query: str):
         print(final_message.content if hasattr(final_message, 'content') else final_message)
         print("="*70 + "\n")
         
-        # Show conversation history
-        print("\n" + "💭"*35)
-        print("CONVERSATION HISTORY")
-        print("💭"*35)
-        print(f"Total messages in memory: {len(conversation_history.messages)}")
+        # Show conversation history from persistent DB
+        print("\n" + "💾"*35)
+        print("PERSISTENT CONVERSATION HISTORY (from SQLite)")
+        print("💾"*35)
         
-        for i, msg in enumerate(conversation_history.messages[-10:], 1):  # Last 10 messages
+        all_stored_messages = history.messages
+        print(f"Total messages in persistent DB: {len(all_stored_messages)}")
+        
+        # Show last 10 messages
+        for i, msg in enumerate(all_stored_messages[-10:], 1):
             msg_type = "USER" if isinstance(msg, HumanMessage) else "AGENT"
             content = msg.content[:100] + "..." if len(msg.content) > 100 else msg.content
             print(f"{i}. [{msg_type}]: {content}")
@@ -375,12 +359,74 @@ def run_query(agent, user_query: str):
         return None
 
 # ============================================================
+# SESSION MANAGEMENT UTILITIES
+# ============================================================
+
+def list_sessions():
+    """List all available sessions in the persistent database"""
+    try:
+        conn = sqlite3.connect('chat_memory.db')
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='message_store'")
+        if not cursor.fetchone():
+            print("No sessions found (database not initialized yet)")
+            conn.close()
+            return []
+        
+        cursor.execute("SELECT DISTINCT session_id FROM message_store")
+        sessions = cursor.fetchall()
+        conn.close()
+        
+        return [s[0] for s in sessions]
+    except Exception as e:
+        print(f"Error listing sessions: {e}")
+        return []
+
+def view_session_history(session_id: str):
+    """View all messages in a specific session"""
+    print(f"\n{'='*70}")
+    print(f"SESSION: {session_id}")
+    print('='*70)
+    
+    history = get_session_history(session_id)
+    messages = history.messages
+    
+    if not messages:
+        print("No messages in this session")
+        return
+    
+    for i, msg in enumerate(messages, 1):
+        msg_type = "USER" if isinstance(msg, HumanMessage) else "AGENT"
+        print(f"\n{i}. [{msg_type}]:")
+        print(f"   {msg.content}")
+    
+    print('='*70 + "\n")
+
+def clear_session_history(session_id: str):
+    """Clear history for a specific session"""
+    history = get_session_history(session_id)
+    history.clear()
+    print(f"✓ Cleared history for session: {session_id}")
+
+def delete_all_sessions():
+    """Delete all sessions (nuclear option)"""
+    try:
+        if os.path.exists('chat_memory.db'):
+            os.remove('chat_memory.db')
+            print("✓ Deleted all sessions (chat_memory.db removed)")
+        else:
+            print("No chat_memory.db found")
+    except Exception as e:
+        print(f"Error deleting database: {e}")
+
+# ============================================================
 # MAIN EXECUTION
 # ============================================================
 
 if __name__ == "__main__":
     print("\n" + "="*70)
-    print("STATEFUL SQL AGENT WITH SHORT-TERM MEMORY")
+    print("STATEFUL SQL AGENT WITH PERSISTENT MEMORY (SQLite)")
     print(f"Using: {MODEL_CONFIGS[SELECTED_MODEL]['name']}")
     print("="*70 + "\n")
     
@@ -391,30 +437,81 @@ if __name__ == "__main__":
     
     agent = create_sql_agent()
     
+    # Ask user for session ID
     print("\n" + "="*70)
-    print("INTERACTIVE MODE WITH MEMORY")
+    print("SESSION SELECTION")
     print("="*70)
-    print("The agent now remembers your conversation!")
-    print("Try follow-up questions like:")
+    
+    existing_sessions = list_sessions()
+    if existing_sessions:
+        print(f"Existing sessions: {', '.join(existing_sessions)}")
+    else:
+        print("No existing sessions found")
+    
+    session_id = input("\nEnter session ID (or press Enter for 'default_session'): ").strip()
+    if not session_id:
+        session_id = "default_session"
+    
+    print(f"\n✓ Using session: {session_id}")
+    
+    # Show existing history for this session
+    if session_id in existing_sessions:
+        print(f"\n⚠️  Session '{session_id}' has existing history!")
+        show_history = input("Show existing history? (y/n): ").strip().lower()
+        if show_history == 'y':
+            view_session_history(session_id)
+    
+    print("\n" + "="*70)
+    print("INTERACTIVE MODE WITH PERSISTENT MEMORY")
+    print("="*70)
+    print("Your conversations are saved to SQLite!")
+    print("They will persist even after you restart the script.")
+    print("\nTry follow-up questions like:")
     print('  - "What about the price?" (after asking about a fruit)')
     print('  - "Calculate the square of that" (after seeing a number)')
     print('  - "What did I ask about earlier?"')
     print("\nCommands:")
-    print("  - Type 'clear' to clear conversation memory")
+    print("  - 'clear' - Clear current session history")
+    print("  - 'history' - View full session history")
+    print("  - 'sessions' - List all sessions")
+    print("  - 'switch' - Switch to different session")
+    print("  - 'delete-all' - Delete all sessions (WARNING!)")
     print("  - Press Enter (empty) to quit")
     print("="*70 + "\n")
     
     while True:
-        user_query = input("🔍 Your query: ")
+        user_query = input(f"🔍 [{session_id}] Your query: ")
         
         if user_query.strip() == "":
             print("\n👋 Exiting...")
             break
         
+        # Handle commands
         if user_query.strip().lower() == "clear":
-            conversation_history.clear()
-            print("\n🧹 Conversation memory cleared!\n")
+            clear_session_history(session_id)
+            continue
+        
+        if user_query.strip().lower() == "history":
+            view_session_history(session_id)
+            continue
+        
+        if user_query.strip().lower() == "sessions":
+            sessions = list_sessions()
+            print(f"\n📋 Available sessions: {', '.join(sessions) if sessions else 'None'}\n")
+            continue
+        
+        if user_query.strip().lower() == "switch":
+            new_session = input("Enter new session ID: ").strip()
+            if new_session:
+                session_id = new_session
+                print(f"✓ Switched to session: {session_id}\n")
+            continue
+        
+        if user_query.strip().lower() == "delete-all":
+            confirm = input("⚠️  Delete ALL sessions? This cannot be undone! (yes/no): ").strip().lower()
+            if confirm == "yes":
+                delete_all_sessions()
             continue
         
         print(f"\n{'-'*70}")
-        run_query(agent, user_query)
+        run_query(agent, user_query, session_id)
